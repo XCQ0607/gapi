@@ -78,7 +78,7 @@ class ConnectionManager extends EventTarget {
     this.reconnectAttempts++;
     setTimeout(() => {
       Logger.output(`正在进行第 ${this.reconnectAttempts} 次重连尝试...`);
-      this.establish().catch(() => {});
+      this.establish().catch(() => { });
     }, this.reconnectDelay);
   }
 }
@@ -202,9 +202,8 @@ class RequestProcessor {
       }
     }
     const queryString = queryParams.toString();
-    return `https://${this.targetDomain}/${pathSegment}${
-      queryString ? "?" + queryString : ""
-    }`;
+    return `https://${this.targetDomain}/${pathSegment}${queryString ? "?" + queryString : ""
+      }`;
   }
 
   _generateRandomString(length) {
@@ -361,34 +360,102 @@ class ProxySystem extends EventTarget {
       }
 
       this._transmitHeaders(response, operationId);
-      const reader = response.body.getReader();
-      const textDecoder = new TextDecoder();
-      let fullBody = "";
 
-      // [核心修正] 在循环内部正确分发流式和非流式数据
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      // --- 核心修改：检查 Content-Type 是否为图片 ---
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.startsWith("image/")) {
+        Logger.output(`检测到图片响应 (${contentType})，正在处理二进制数据...`);
+        const blob = await response.blob();
+        const base64Data = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result.split(",")[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
 
-        const chunk = textDecoder.decode(value, { stream: true });
+        // 构造伪造的 Google JSON 响应
+        const fakeGoogleResponse = {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: contentType,
+                      data: base64Data,
+                    },
+                  },
+                ],
+                role: "model",
+              },
+              finishReason: "STOP",
+              index: 0,
+            },
+          ],
+        };
 
-        if (mode === "real") {
-          // 流式模式：立即转发每个数据块
-          this._transmitChunk(chunk, operationId);
-        } else {
-          // fake mode
-          // 非流式模式：拼接数据块，等待最后一次性转发
-          fullBody += chunk;
+        const jsonString = JSON.stringify(fakeGoogleResponse);
+        this._transmitChunk(jsonString, operationId);
+        Logger.output("图片数据已封装并发送。");
+      } else {
+        // --- 原有的文本/流式处理逻辑 ---
+        const reader = response.body.getReader();
+        const textDecoder = new TextDecoder();
+        let fullBody = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = textDecoder.decode(value, { stream: true });
+
+          if (mode === "real") {
+            this._transmitChunk(chunk, operationId);
+          } else {
+            fullBody += chunk;
+          }
+        }
+
+        if (mode === "fake") {
+          // 尝试解析并转换 Imagen 格式 (predictions -> candidates)
+          try {
+            // 只有当看起来像 JSON 时才尝试解析
+            if (fullBody.trim().startsWith("{")) {
+              const jsonBody = JSON.parse(fullBody);
+              if (jsonBody.predictions && Array.isArray(jsonBody.predictions)) {
+                Logger.output(
+                  "检测到 Imagen 格式响应，正在转换为 Gemini 格式..."
+                );
+                const candidates = jsonBody.predictions.map((pred, index) => ({
+                  content: {
+                    parts: [
+                      {
+                        inlineData: {
+                          mimeType: pred.mimeType || "image/png",
+                          data: pred.bytesBase64Encoded,
+                        },
+                      },
+                    ],
+                    role: "model",
+                  },
+                  finishReason: "STOP",
+                  index: index,
+                }));
+
+                const newBody = { candidates: candidates };
+                fullBody = JSON.stringify(newBody);
+                Logger.output("转换完成。");
+              }
+            }
+          } catch (e) {
+            // 解析失败则忽略，发送原始数据
+          }
+
+          this._transmitChunk(fullBody, operationId);
         }
       }
 
-      Logger.output("数据流已读取完成。");
-
-      if (mode === "fake") {
-        // 非流式模式下，在循环结束后，转发拼接好的完整响应体
-        this._transmitChunk(fullBody, operationId);
-      }
-
+      Logger.output("数据传输完成。");
       this._transmitStreamEnd(operationId);
     } catch (error) {
       if (error.name === "AbortError") {
