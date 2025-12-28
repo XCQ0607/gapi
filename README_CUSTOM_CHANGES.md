@@ -1,3 +1,5 @@
+原作者仓库：https://github.com/Ellinav/ais2api
+
 # 自定义修改指南：图片支持与 SSE 缓冲
 
 本指南记录了对 `black-browser.js` 的自定义修改。当原作者更新脚本时，您可以参考本指南重新应用您的功能。
@@ -7,15 +9,16 @@
 主要的修改位于 `ProxySystem` 类的 `_processProxyRequest` 方法中。
 
 **目标**：将默认的响应处理逻辑替换为您支持以下功能的自定义逻辑：
-1.  **图片响应**：自动将 `image/*` 响应转换为 Base64 并封装在兼容 Google 的 JSON 格式中。
-2.  **SSE 行缓冲**：确保 `mode === "real"` 流是按行发送（Server-Sent Events 格式），而不是原始数据块。
-3.  **Imagen 适配器**：在 `fake` 模式下将 Imagen 的 `predictions` 格式转换为 Gemini 的 `candidates` 格式。
+
+1. **图片响应**：自动将 `image/*` 响应转换为 Base64 并封装在兼容 Google 的 JSON 格式中。
+2. **SSE 行缓冲**：确保 `mode === "real"` 流是按行发送（Server-Sent Events 格式），而不是原始数据块。
+3. **Imagen 适配器**：在 `fake` 模式下将 Imagen 的 `predictions` 格式转换为 Gemini 的 `candidates` 格式。
 
 ### 如何应用
 
-1.  打开新版本的 `black-browser.js`。
-2.  在 `ProxySystem` 类中找到 `_processProxyRequest(requestSpec)` 方法。
-3.  **将整个方法替换**为以下代码：
+1. 打开新版本的 `black-browser.js`。
+2. 在 `ProxySystem` 类中找到 `_processProxyRequest(requestSpec)` 方法。
+3. **将整个方法替换**为以下代码：
 
 ```javascript
   // [自定义] 处理代理请求，包含图片支持与 SSE 缓冲
