@@ -75,12 +75,13 @@ class AuthSource {
       }
     }
 
-    // 将扫描到的原始索引存起来
+    // 存取扫描到的原始索引
     this.initialIndices = [...new Set(indices)].sort((a, b) => a - b);
     this.availableIndices = [...this.initialIndices]; // 先假设都可用
 
     this.logger.info(
-      `[Auth] 在 '${this.authMode}' 模式下，初步发现 ${this.initialIndices.length
+      `[Auth] 在 '${this.authMode}' 模式下，初步发现 ${
+        this.initialIndices.length
       } 个认证源: [${this.initialIndices.join(", ")}]`
     );
   }
@@ -113,7 +114,8 @@ class AuthSource {
 
     if (invalidSourceDescriptions.length > 0) {
       this.logger.warn(
-        `⚠️ [Auth] 预检验发现 ${invalidSourceDescriptions.length
+        `⚠️ [Auth] 预检验发现 ${
+          invalidSourceDescriptions.length
         } 个格式错误或无法读取的认证源: [${invalidSourceDescriptions.join(
           ", "
         )}]，将从可用列表中移除。`
@@ -174,7 +176,7 @@ class BrowserManager {
     this.page = null;
     this.currentAuthIndex = 0;
     this.scriptFileName = "black-browser.js";
-    // [优化] 为低内存的Docker/云环境设置优化的启动参数
+    this.noButtonCount = 0;
     this.launchArgs = [
       "--disable-dev-shm-usage", // 关键！防止 /dev/shm 空间不足导致浏览器崩溃
       "--disable-gpu",
@@ -201,13 +203,18 @@ class BrowserManager {
           "camoufox-linux",
           "camoufox"
         );
-      } else if (platform === "win32") {
-        // Windows fallback: try to find a standard installation or rely on config
-        this.browserExecutablePath = path.join(__dirname, "camoufox", "camoufox.exe");
-        this.logger.info(`[Browser] Windows detected. Using path: ${this.browserExecutablePath}`);
       } else {
         throw new Error(`Unsupported operating system: ${platform}`);
       }
+    }
+  }
+
+  notifyUserActivity() {
+    if (this.noButtonCount > 0) {
+      this.logger.info(
+        "[Browser] ⚡ 收到用户请求信号，强制唤醒后台检测 (重置计数器)"
+      );
+      this.noButtonCount = 0;
     }
   }
 
@@ -320,7 +327,7 @@ class BrowserManager {
         pageTitle.includes("not available")
       ) {
         throw new Error(
-          "🚨 当前 IP 不支持访问 Google AI Studio (地区受限/送中)。Claw 节点可能被识别为受限地区，请尝试重启容器获取新IP。"
+          "🚨 当前 IP 不支持访问 Google AI Studio。请更换节点后重启！"
         );
       }
 
@@ -338,46 +345,91 @@ class BrowserManager {
         );
       }
 
-      this.logger.info(`[Browser] 正在检查 Cookie 同意横幅...`);
-      try {
-        const agreeButton = this.page.locator('button:text("Agree")');
-        await agreeButton.waitFor({ state: "visible", timeout: 10000 });
-        this.logger.info(
-          `[Browser] ✅ 发现 Cookie 同意横幅，正在点击 "Agree"...`
-        );
-        await agreeButton.click({ force: true });
-        await this.page.waitForTimeout(1000);
-      } catch (error) {
-        this.logger.info(`[Browser] 未发现 Cookie 同意横幅，跳过。`);
+      this.logger.info(
+        `[Browser] 进入 20秒 检查流程 (目标: Cookie + Got it + 新手引导)...`
+      );
+
+      const startTime = Date.now();
+      const timeLimit = 20000;
+
+      // 状态记录表
+      const popupStatus = {
+        cookie: false,
+        gotIt: false,
+        guide: false,
+      };
+
+      while (Date.now() - startTime < timeLimit) {
+        // 如果3个都处理过了，立刻退出 ---
+        if (popupStatus.cookie && popupStatus.gotIt && popupStatus.guide) {
+          this.logger.info(
+            `[Browser] ⚡ 完美！3个弹窗全部处理完毕，提前进入下一步。`
+          );
+          break;
+        }
+
+        let clickedInThisLoop = false;
+
+        // 1. 检查 Cookie "Agree" (如果还没点过)
+        if (!popupStatus.cookie) {
+          try {
+            const agreeBtn = this.page.locator('button:text("Agree")').first();
+            if (await agreeBtn.isVisible({ timeout: 100 })) {
+              await agreeBtn.click({ force: true });
+              this.logger.info(`[Browser] ✅ (1/3) 点击了 "Cookie Agree"`);
+              popupStatus.cookie = true;
+              clickedInThisLoop = true;
+            }
+          } catch (e) {}
+        }
+
+        // 2. 检查 "Got it" (如果还没点过)
+        if (!popupStatus.gotIt) {
+          try {
+            const gotItBtn = this.page
+              .locator('div.dialog button:text("Got it")')
+              .first();
+            if (await gotItBtn.isVisible({ timeout: 100 })) {
+              await gotItBtn.click({ force: true });
+              this.logger.info(`[Browser] ✅ (2/3) 点击了 "Got it" 弹窗`);
+              popupStatus.gotIt = true;
+              clickedInThisLoop = true;
+            }
+          } catch (e) {}
+        }
+
+        // 3. 检查 新手引导 "Close" (如果还没点过)
+        if (!popupStatus.guide) {
+          try {
+            const closeBtn = this.page
+              .locator('button[aria-label="Close"]')
+              .first();
+            if (await closeBtn.isVisible({ timeout: 100 })) {
+              await closeBtn.click({ force: true });
+              this.logger.info(`[Browser] ✅ (3/3) 点击了 "新手引导关闭" 按钮`);
+              popupStatus.guide = true;
+              clickedInThisLoop = true;
+            }
+          } catch (e) {}
+        }
+
+        // 如果本轮点击了按钮，稍微等一下动画；如果没点，等待1秒避免死循环空转
+        await this.page.waitForTimeout(clickedInThisLoop ? 500 : 1000);
       }
 
-      this.logger.info(`[Browser] 正在检查 "Got it" 弹窗...`);
-      try {
-        const gotItButton = this.page.locator(
-          'div.dialog button:text("Got it")'
-        );
-        await gotItButton.waitFor({ state: "visible", timeout: 15000 });
-        this.logger.info(`[Browser] ✅ 发现 "Got it" 弹窗，正在点击...`);
-        await gotItButton.click({ force: true });
-        await this.page.waitForTimeout(1000);
-      } catch (error) {
-        this.logger.info(`[Browser] 未发现 "Got it" 弹窗，跳过。`);
-      }
+      this.logger.info(
+        `[Browser] 弹窗检查结束 (耗时: ${Math.round(
+          (Date.now() - startTime) / 1000
+        )}s)，结果: ` +
+          `Cookie[${popupStatus.cookie ? "Ok" : "No"}], ` +
+          `GotIt[${popupStatus.gotIt ? "Ok" : "No"}], ` +
+          `Guide[${popupStatus.guide ? "Ok" : "No"}]`
+      );
 
-      this.logger.info(`[Browser] 正在检查新手引导...`);
-      try {
-        const closeButton = this.page.locator('button[aria-label="Close"]');
-        await closeButton.waitFor({ state: "visible", timeout: 15000 });
-        this.logger.info(`[Browser] ✅ 发现新手引导弹窗，正在点击关闭按钮...`);
-        await closeButton.click({ force: true });
-        await this.page.waitForTimeout(1000);
-      } catch (error) {
-        this.logger.info(
-          `[Browser] 未发现 "It's time to build" 新手引导，跳过。`
-        );
-      }
+      this.logger.info(
+        `[Browser] 弹窗清理阶段结束，准备进入 Code 按钮点击流程。`
+      );
 
-      this.logger.info("[Browser] 准备UI交互，强行移除所有可能的遮罩层...");
       await this.page.evaluate(() => {
         const overlays = document.querySelectorAll("div.cdk-overlay-backdrop");
         if (overlays.length > 0) {
@@ -474,10 +526,40 @@ class BrowserManager {
       await this.page.locator('button:text("Preview")').click();
       this.logger.info("[Browser] ✅ UI交互完成，脚本已开始运行。");
       this.currentAuthIndex = authIndex;
+      this._startBackgroundWakeup();
+      this.logger.info("[Browser] (后台任务) 🛡️ 监控进程已启动...");
+      await this.page.waitForTimeout(1000);
+      this.logger.info(
+        "[Browser] ⚡ 正在发送主动唤醒请求以触发 Launch 流程..."
+      );
+      try {
+        await this.page.evaluate(async () => {
+          try {
+            await fetch(
+              "https://generativelanguage.googleapis.com/v1beta/models?key=ActiveTrigger",
+              {
+                method: "GET",
+                headers: { "Content-Type": "application/json" },
+              }
+            );
+          } catch (e) {
+            console.log(
+              "[ProxyClient] 主动唤醒请求已发送 (预期内可能会失败，这很正常)"
+            );
+          }
+        });
+        this.logger.info("[Browser] ⚡ 主动唤醒请求已发送。");
+      } catch (e) {
+        this.logger.warn(
+          `[Browser] 主动唤醒请求发送异常 (不影响主流程): ${e.message}`
+        );
+      }
+
       this.logger.info("==================================================");
       this.logger.info(`✅ [Browser] 账号 ${authIndex} 的上下文初始化成功！`);
       this.logger.info("✅ [Browser] 浏览器客户端已准备就绪。");
       this.logger.info("==================================================");
+      this._startBackgroundWakeup();
     } catch (error) {
       this.logger.error(
         `❌ [Browser] 账户 ${authIndex} 的上下文初始化失败: ${error.message}`
@@ -509,6 +591,217 @@ class BrowserManager {
     this.logger.info(
       `✅ [Browser] 账号切换完成，当前账号: ${this.currentAuthIndex}`
     );
+  }
+
+  async _startBackgroundWakeup() {
+    const currentPage = this.page;
+    await new Promise((r) => setTimeout(r, 1500));
+    if (!currentPage || currentPage.isClosed() || this.page !== currentPage)
+      return;
+    this.logger.info("[Browser] (后台任务) 🛡️ 网页保活监控已启动");
+    while (
+      currentPage &&
+      !currentPage.isClosed() &&
+      this.page === currentPage
+    ) {
+      try {
+        // --- [增强步骤 1] 强制唤醒页面 (解决不发请求不刷新的问题) ---
+        await currentPage.bringToFront().catch(() => {});
+
+        // 关键：在无头模式下，仅仅 bringToFront 可能不够，需要伪造鼠标移动来触发渲染帧
+        // 随机在一个无害区域轻微晃动鼠标
+        await currentPage.mouse.move(10, 10);
+        await currentPage.mouse.move(20, 20);
+
+        // --- [增强步骤 2] 智能查找 (查找文本并向上锁定可交互父级) ---
+        const targetInfo = await currentPage.evaluate(() => {
+          // 1. 直接CSS定位
+          try {
+            const preciseCandidates = Array.from(
+              document.querySelectorAll(
+                ".interaction-modal p, .interaction-modal button"
+              )
+            );
+            for (const el of preciseCandidates) {
+              const text = (el.innerText || "").trim();
+              if (/Launch|rocket_launch/i.test(text)) {
+                const rect = el.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0) {
+                  return {
+                    found: true,
+                    x: rect.left + rect.width / 2,
+                    y: rect.top + rect.height / 2,
+                    tagName: el.tagName,
+                    text: text.substring(0, 15),
+                    strategy: "precise_css", // 标记：这是通过精准CSS找到的
+                  };
+                }
+              }
+            }
+          } catch (e) {}
+          // 2. 扫描Y轴400-800范围刻意元素
+          const MIN_Y = 400;
+          const MAX_Y = 800;
+
+          // 辅助函数：判断元素是否可见且在区域内
+          const isValid = (rect) => {
+            return (
+              rect.width > 0 &&
+              rect.height > 0 &&
+              rect.top > MIN_Y &&
+              rect.top < MAX_Y
+            );
+          };
+
+          // 扫描所有包含关键词的元素
+          const candidates = Array.from(
+            document.querySelectorAll("button, span, div, a, i")
+          );
+
+          for (const el of candidates) {
+            const text = (el.innerText || "").trim();
+            // 匹配 Launch 或 rocket_launch 图标名
+            if (!/Launch|rocket_launch/i.test(text)) continue;
+
+            let targetEl = el;
+            let rect = targetEl.getBoundingClientRect();
+
+            // [关键优化] 如果当前元素很小或是纯文本容器，尝试向上找 3 层父级
+            let parentDepth = 0;
+            while (parentDepth < 3 && targetEl.parentElement) {
+              if (
+                targetEl.tagName === "BUTTON" ||
+                targetEl.getAttribute("role") === "button"
+              ) {
+                break;
+              }
+              const parent = targetEl.parentElement;
+              const pRect = parent.getBoundingClientRect();
+              if (isValid(pRect)) {
+                targetEl = parent;
+                rect = pRect;
+              }
+              parentDepth++;
+            }
+
+            // 最终检查
+            if (isValid(rect)) {
+              return {
+                found: true,
+                x: rect.left + rect.width / 2,
+                y: rect.top + rect.height / 2,
+                tagName: targetEl.tagName,
+                text: text.substring(0, 15),
+                strategy: "fuzzy_scan", // 标记：这是通过模糊扫描找到的
+              };
+            }
+          }
+          return { found: false };
+        });
+
+        // --- [增强步骤 3] 执行操作 ---
+        if (targetInfo.found) {
+          this.noButtonCount = 0;
+          this.logger.info(
+            `[Browser] 🎯 锁定目标 [${targetInfo.tagName}] (策略: ${
+              targetInfo.strategy === "precise_css" ? "精准定位" : "模糊扫描"
+            })...`
+          );
+
+          // === 策略 A: 物理点击 (模拟真实鼠标) ===
+          // 1. 移动过去
+          await currentPage.mouse.move(targetInfo.x, targetInfo.y, {
+            steps: 5,
+          });
+          // 2. 悬停 (给 hover 样式一点反应时间)
+          await new Promise((r) => setTimeout(r, 300));
+          // 3. 按下
+          await currentPage.mouse.down();
+          // 4. 长按 (某些按钮防误触，需要按住一小会儿)
+          await new Promise((r) => setTimeout(r, 400));
+          // 5. 抬起
+          await currentPage.mouse.up();
+
+          this.logger.info(`[Browser] 🖱️ 物理点击已执行，验证结果...`);
+          // 等待 1.5 秒看效果
+          await new Promise((r) => setTimeout(r, 1500));
+
+          // === 策略 B: JS 补刀 (如果物理点击失败) ===
+          // 再次检查按钮是否还在原地
+          const isStillThere = await currentPage.evaluate(() => {
+            // 逻辑同上，简单检查
+            const allText = document.body.innerText;
+            // 简单粗暴检查页面可视区是否还有那个特定位置的文字
+            // 这里为了性能做简化：再次扫描元素
+            const els = Array.from(
+              document.querySelectorAll('button, span, div[role="button"]')
+            );
+            return els.some((el) => {
+              const r = el.getBoundingClientRect();
+              return (
+                /Launch|rocket_launch/i.test(el.innerText) &&
+                r.top > 400 &&
+                r.top < 800 &&
+                r.height > 0
+              );
+            });
+          });
+
+          if (isStillThere) {
+            this.logger.warn(
+              `[Browser] ⚠️ 物理点击似乎无效（按钮仍在），尝试 JS 强力点击...`
+            );
+
+            // 直接在浏览器内部触发 click 事件
+            await currentPage.evaluate(() => {
+              const MIN_Y = 400;
+              const MAX_Y = 800;
+              const candidates = Array.from(
+                document.querySelectorAll('button, span, div[role="button"]')
+              );
+              for (const el of candidates) {
+                const r = el.getBoundingClientRect();
+                if (
+                  /Launch|rocket_launch/i.test(el.innerText) &&
+                  r.top > MIN_Y &&
+                  r.top < MAX_Y
+                ) {
+                  // 尝试找到最近的 button 父级点击
+                  let target = el;
+                  if (target.closest("button"))
+                    target = target.closest("button");
+                  target.click(); // 原生 JS 点击
+                  console.log(
+                    "[ProxyClient] JS Click triggered on " + target.tagName
+                  );
+                  return true;
+                }
+              }
+            });
+            await new Promise((r) => setTimeout(r, 2000));
+          } else {
+            this.logger.info(`[Browser] ✅ 物理点击成功，按钮已消失。`);
+            await new Promise((r) => setTimeout(r, 60000));
+            this.noButtonCount = 21;
+          }
+        } else {
+          this.noButtonCount++;
+          // 5. [关键] 智能休眠逻辑 (支持被唤醒)
+          if (this.noButtonCount > 20) {
+            for (let i = 0; i < 30; i++) {
+              if (this.noButtonCount === 0) {
+                break;
+              }
+              await new Promise((r) => setTimeout(r, 1000));
+            }
+          } else {
+            await new Promise((r) => setTimeout(r, 1500));
+          }
+        }
+      } catch (e) {
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
   }
 }
 
@@ -947,6 +1240,9 @@ class RequestHandler {
   }
 
   async processRequest(req, res) {
+    if (this.browserManager) {
+      this.browserManager.notifyUserActivity();
+    }
     const requestId = this._generateRequestId();
     res.on("close", () => {
       if (!res.writableEnded) {
@@ -1063,6 +1359,9 @@ class RequestHandler {
   }
 
   async processOpenAIRequest(req, res) {
+    if (this.browserManager) {
+      this.browserManager.notifyUserActivity();
+    }
     const requestId = this._generateRequestId();
     const isOpenAIStream = req.body.stream === true;
     const model = req.body.model || "gemini-1.5-pro-latest";
@@ -1442,7 +1741,8 @@ class RequestHandler {
           ) {
             // 只有在不是“用户取消”的情况下，才打印“尝试失败”的警告
             this.logger.warn(
-              `[Request] 尝试 #${attempt} 失败: 收到 ${lastMessage.status || "未知"
+              `[Request] 尝试 #${attempt} 失败: 收到 ${
+                lastMessage.status || "未知"
               } 错误。 - ${lastMessage.message}`
             );
           }
@@ -1502,7 +1802,7 @@ class RequestHandler {
         this.logger.info(
           `✅ [Request] 响应结束，原因: ${finishReason}，请求ID: ${proxyRequest.request_id}`
         );
-      } catch (e) { }
+      } catch (e) {}
       res.write("data: [DONE]\n\n");
     } catch (error) {
       this._handleRequestError(error, res);
@@ -1579,7 +1879,7 @@ class RequestHandler {
             );
           }
         }
-      } catch (e) { }
+      } catch (e) {}
     } catch (error) {
       if (error.message !== "Queue timeout") throw error;
       this.logger.warn("[Request] 真流式响应超时，可能流已正常结束。");
@@ -1686,7 +1986,7 @@ class RequestHandler {
         this.logger.info(
           `✅ [Request] 响应结束，原因: ${finishReason}，请求ID: ${proxyRequest.request_id}`
         );
-      } catch (e) { }
+      } catch (e) {}
 
       // 4. 设置正确的JSON响应头，并一次性发送处理过的全部数据
       res
@@ -2165,21 +2465,24 @@ class ProxyServerSystem extends EventEmitter {
     this.logger.info(`  监听地址: ${this.config.host}`);
     this.logger.info(`  流式模式: ${this.config.streamingMode}`);
     this.logger.info(
-      `  轮换计数切换阈值: ${this.config.switchOnUses > 0
-        ? `每 ${this.config.switchOnUses} 次请求后切换`
-        : "已禁用"
+      `  轮换计数切换阈值: ${
+        this.config.switchOnUses > 0
+          ? `每 ${this.config.switchOnUses} 次请求后切换`
+          : "已禁用"
       }`
     );
     this.logger.info(
-      `  失败计数切换: ${this.config.failureThreshold > 0
-        ? `失败${this.config.failureThreshold} 次后切换`
-        : "已禁用"
+      `  失败计数切换: ${
+        this.config.failureThreshold > 0
+          ? `失败${this.config.failureThreshold} 次后切换`
+          : "已禁用"
       }`
     );
     this.logger.info(
-      `  立即切换报错码: ${this.config.immediateSwitchStatusCodes.length > 0
-        ? this.config.immediateSwitchStatusCodes.join(", ")
-        : "已禁用"
+      `  立即切换报错码: ${
+        this.config.immediateSwitchStatusCodes.length > 0
+          ? this.config.immediateSwitchStatusCodes.join(", ")
+          : "已禁用"
       }`
     );
     this.logger.info(`  单次请求最大重试: ${this.config.maxRetries}次`);
@@ -2193,6 +2496,9 @@ class ProxyServerSystem extends EventEmitter {
   async start(initialAuthIndex = null) {
     // <<<--- 1. 重新接收参数
     this.logger.info("[System] 开始弹性启动流程...");
+    await this._startHttpServer();
+    await this._startWebSocketServer();
+    this.logger.info("[System] 准备加载浏览器...");
     const allAvailableIndices = this.authSource.availableIndices;
 
     if (allAvailableIndices.length === 0) {
@@ -2245,10 +2551,6 @@ class ProxyServerSystem extends EventEmitter {
       // 如果所有账号都尝试失败了
       throw new Error("所有认证源均尝试失败，服务器无法启动。");
     }
-
-    // 只有在浏览器成功启动后，才启动网络服务
-    await this._startHttpServer();
-    await this._startWebSocketServer();
     this.logger.info(`[System] 代理服务器系统启动完成。`);
     this.emit("started");
   }
@@ -2278,7 +2580,8 @@ class ProxyServerSystem extends EventEmitter {
 
       if (clientKey && serverApiKeys.includes(clientKey)) {
         this.logger.info(
-          `[Auth] API Key验证通过 (来自: ${req.headers["x-forwarded-for"] || req.ip
+          `[Auth] API Key验证通过 (来自: ${
+            req.headers["x-forwarded-for"] || req.ip
           })`
         );
         if (req.query.key) {
@@ -2319,7 +2622,8 @@ class ProxyServerSystem extends EventEmitter {
           `[System] HTTP服务器已在 http://${this.config.host}:${this.config.httpPort} 上监听`
         );
         this.logger.info(
-          `[System] Keep-Alive 超时已设置为 ${this.httpServer.keepAliveTimeout / 1000
+          `[System] Keep-Alive 超时已设置为 ${
+            this.httpServer.keepAliveTimeout / 1000
           } 秒。`
         );
         resolve();
@@ -2390,8 +2694,9 @@ class ProxyServerSystem extends EventEmitter {
       <style>body{display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;background:#f0f2f5}form{background:white;padding:40px;border-radius:10px;box-shadow:0 4px 8px rgba(0,0,0,0.1);text-align:center}input{width:250px;padding:10px;margin-top:10px;border:1px solid #ccc;border-radius:5px}button{width:100%;padding:10px;background-color:#007bff;color:white;border:none;border-radius:5px;margin-top:20px;cursor:pointer}.error{color:red;margin-top:10px}</style>
       </head><body><form action="/login" method="post"><h2>请输入 API Key</h2>
       <input type="password" name="apiKey" placeholder="API Key" required autofocus><button type="submit">登录</button>
-      ${req.query.error ? '<p class="error">API Key 错误!</p>' : ""
-        }</form></body></html>`;
+      ${
+        req.query.error ? '<p class="error">API Key 错误!</p>' : ""
+      }</form></body></html>`;
       res.send(loginHtml);
     });
     app.post("/login", (req, res) => {
@@ -2470,31 +2775,37 @@ class ProxyServerSystem extends EventEmitter {
         <div id="status-section">
             <pre>
 <span class="label">服务状态</span>: <span class="status-ok">Running</span>
-<span class="label">浏览器连接</span>: <span class="${browserManager.browser ? "status-ok" : "status-error"
-        }">${!!browserManager.browser}</span>
+<span class="label">浏览器连接</span>: <span class="${
+        browserManager.browser ? "status-ok" : "status-error"
+      }">${!!browserManager.browser}</span>
 --- 服务配置 ---
-<span class="label">流模式</span>: ${config.streamingMode
-        } (仅启用流式传输时生效)
-<span class="label">强制推理</span>: ${this.forceThinking ? "✅ 已启用" : "❌ 已关闭"
-        }
-<span class="label">立即切换 (状态码)</span>: ${config.immediateSwitchStatusCodes.length > 0
+<span class="label">流模式</span>: ${
+        config.streamingMode
+      } (仅启用流式传输时生效)
+<span class="label">强制推理</span>: ${
+        this.forceThinking ? "✅ 已启用" : "❌ 已关闭"
+      }
+<span class="label">立即切换 (状态码)</span>: ${
+        config.immediateSwitchStatusCodes.length > 0
           ? `[${config.immediateSwitchStatusCodes.join(", ")}]`
           : "已禁用"
-        }
+      }
 <span class="label">API 密钥</span>: ${config.apiKeySource}
 --- 账号状态 ---
 <span class="label">当前使用账号</span>: #${requestHandler.currentAuthIndex}
-<span class="label">使用次数计数</span>: ${requestHandler.usageCount} / ${config.switchOnUses > 0 ? config.switchOnUses : "N/A"
-        }
-<span class="label">连续失败计数</span>: ${requestHandler.failureCount} / ${config.failureThreshold > 0 ? config.failureThreshold : "N/A"
-        }
+<span class="label">使用次数计数</span>: ${requestHandler.usageCount} / ${
+        config.switchOnUses > 0 ? config.switchOnUses : "N/A"
+      }
+<span class="label">连续失败计数</span>: ${requestHandler.failureCount} / ${
+        config.failureThreshold > 0 ? config.failureThreshold : "N/A"
+      }
 <span class="label">扫描到的总帐号</span>: [${initialIndices.join(
-          ", "
-        )}] (总数: ${initialIndices.length})
+        ", "
+      )}] (总数: ${initialIndices.length})
       ${accountDetailsHtml}
 <span class="label">格式错误 (已忽略)</span>: [${invalidIndices.join(
-          ", "
-        )}] (总数: ${invalidIndices.length})
+        ", "
+      )}] (总数: ${invalidIndices.length})
             </pre>
         </div>
         <div id="actions-section" style="margin-top: 2em;">
@@ -2566,8 +2877,9 @@ class ProxyServerSystem extends EventEmitter {
         }
             
         function toggleStreamingMode() { 
-            const newMode = prompt('请输入新的流模式 (real 或 fake):', '${this.config.streamingMode
-        }');
+            const newMode = prompt('请输入新的流模式 (real 或 fake):', '${
+              this.config.streamingMode
+            }');
             if (newMode === 'fake' || newMode === 'real') {
                 fetch('/api/set-mode', { 
                     method: 'POST', 
@@ -2628,15 +2940,19 @@ class ProxyServerSystem extends EventEmitter {
               : "已禁用",
           apiKeySource: config.apiKeySource,
           currentAuthIndex: requestHandler.currentAuthIndex,
-          usageCount: `${requestHandler.usageCount} / ${config.switchOnUses > 0 ? config.switchOnUses : "N/A"
-            }`,
-          failureCount: `${requestHandler.failureCount} / ${config.failureThreshold > 0 ? config.failureThreshold : "N/A"
-            }`,
-          initialIndices: `[${initialIndices.join(", ")}] (总数: ${initialIndices.length
-            })`,
+          usageCount: `${requestHandler.usageCount} / ${
+            config.switchOnUses > 0 ? config.switchOnUses : "N/A"
+          }`,
+          failureCount: `${requestHandler.failureCount} / ${
+            config.failureThreshold > 0 ? config.failureThreshold : "N/A"
+          }`,
+          initialIndices: `[${initialIndices.join(", ")}] (总数: ${
+            initialIndices.length
+          })`,
           accountDetails: accountDetails,
-          invalidIndices: `[${invalidIndices.join(", ")}] (总数: ${invalidIndices.length
-            })`,
+          invalidIndices: `[${invalidIndices.join(", ")}] (总数: ${
+            invalidIndices.length
+          })`,
         },
         logs: logs.join("\n"),
         logCount: logs.length,
@@ -2765,4 +3081,3 @@ if (require.main === module) {
 }
 
 module.exports = { ProxyServerSystem, BrowserManager, initializeServer };
-
