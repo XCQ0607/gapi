@@ -341,8 +341,7 @@ class ProxySystem extends EventTarget {
     }
   }
 
-  // 在 v3.4-black-browser.js 中
-  // [最终武器 - Canvas抽魂] 替换整个 _processProxyRequest 函数
+  // [最终优化版] 替换整个 _processProxyRequest 函数
   async _processProxyRequest(requestSpec) {
     const operationId = requestSpec.request_id;
     const mode = requestSpec.streaming_mode || "fake";
@@ -363,7 +362,7 @@ class ProxySystem extends EventTarget {
 
       this._transmitHeaders(response, operationId);
 
-      // --- 核心修改：检查 Content-Type 是否为图片 ---
+      // 1. 检查 Content-Type 是否为二进制图片
       const contentType = response.headers.get("content-type") || "";
       if (contentType.startsWith("image/")) {
         Logger.output(`检测到图片响应 (${contentType})，正在处理二进制数据...`);
@@ -375,41 +374,31 @@ class ProxySystem extends EventTarget {
           reader.readAsDataURL(blob);
         });
 
-        // 构造伪造的 Google JSON 响应
+        // 构造标准 Google JSON 响应
         const fakeGoogleResponse = {
-          candidates: [
-            {
-              content: {
-                parts: [
-                  {
-                    inlineData: {
-                      mimeType: contentType,
-                      data: base64Data,
-                    },
-                  },
-                ],
-                role: "model",
-              },
-              finishReason: "STOP",
-              index: 0,
+          candidates: [{
+            content: {
+              parts: [{ inlineData: { mimeType: contentType, data: base64Data } }],
+              role: "model",
             },
-          ],
+            finishReason: "STOP",
+            index: 0,
+          }],
         };
 
         const jsonString = JSON.stringify(fakeGoogleResponse);
         this._transmitChunk(`data: ${jsonString}\n\n`, operationId);
         Logger.output("图片数据已封装并发送。");
       } else {
-        // --- 原有的文本/流式处理逻辑 ---
+        // 2. 处理文本/JSON 响应
         const reader = response.body.getReader();
         const textDecoder = new TextDecoder();
         let fullBody = "";
-
         let buffer = "";
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-
           const chunk = textDecoder.decode(value, { stream: true });
 
           if (mode === "real") {
@@ -424,43 +413,82 @@ class ProxySystem extends EventTarget {
             fullBody += chunk;
           }
         }
+
         if (mode === "real" && buffer.length > 0) {
           this._transmitChunk(buffer, operationId);
         }
 
         if (mode === "fake") {
-          // 尝试解析并转换 Imagen 格式 (predictions -> candidates)
+          // === 核心增强逻辑：智能格式转换 ===
           try {
             // 只有当看起来像 JSON 时才尝试解析
             if (fullBody.trim().startsWith("{")) {
               const jsonBody = JSON.parse(fullBody);
-              if (jsonBody.predictions && Array.isArray(jsonBody.predictions)) {
-                Logger.output(
-                  "检测到 Imagen 格式响应，正在转换为 Gemini 格式..."
-                );
-                const candidates = jsonBody.predictions.map((pred, index) => ({
+              let candidates = null;
+
+              // 情况 A: 已经是标准 Google 格式
+              if (jsonBody.candidates && Array.isArray(jsonBody.candidates)) {
+                // 不做修改，直接透传
+              }
+              // 情况 B: Imagen 格式 (predictions)
+              else if (jsonBody.predictions && Array.isArray(jsonBody.predictions)) {
+                Logger.output("检测到 Imagen 格式，正在转换...");
+                candidates = jsonBody.predictions.map((pred, index) => ({
                   content: {
-                    parts: [
-                      {
-                        inlineData: {
-                          mimeType: pred.mimeType || "image/png",
-                          data: pred.bytesBase64Encoded,
-                        },
-                      },
-                    ],
+                    parts: [{ inlineData: { mimeType: pred.mimeType || "image/png", data: pred.bytesBase64Encoded } }],
                     role: "model",
                   },
                   finishReason: "STOP",
                   index: index,
                 }));
+              }
+              // 情况 C: 常见的 images 数组格式 { "images": ["base64..."] }
+              else if (jsonBody.images && Array.isArray(jsonBody.images)) {
+                Logger.output("检测到 images 数组格式，正在转换...");
+                candidates = jsonBody.images.map((img, index) => ({
+                  content: {
+                    parts: [{ inlineData: { mimeType: "image/png", data: img } }],
+                    role: "model",
+                  },
+                  finishReason: "STOP",
+                  index: index,
+                }));
+              }
+              // 情况 D: 单个 image 字段 { "image": "base64..." }
+              else if (jsonBody.image && typeof jsonBody.image === 'string') {
+                Logger.output("检测到 image 字段格式，正在转换...");
+                candidates = [{
+                  content: {
+                    parts: [{ inlineData: { mimeType: "image/png", data: jsonBody.image } }],
+                    role: "model",
+                  },
+                  finishReason: "STOP",
+                  index: 0,
+                }];
+              }
+              // 情况 E: data 字段 { "data": "base64..." }
+              else if (jsonBody.data && typeof jsonBody.data === 'string' && jsonBody.data.length > 100) {
+                Logger.output("检测到 data 字段格式，正在转换...");
+                candidates = [{
+                  content: {
+                    parts: [{ inlineData: { mimeType: "image/png", data: jsonBody.data } }],
+                    role: "model",
+                  },
+                  finishReason: "STOP",
+                  index: 0,
+                }];
+              }
 
+              // 如果发生了转换，重新封装 fullBody
+              if (candidates) {
                 const newBody = { candidates: candidates };
                 fullBody = JSON.stringify(newBody);
-                Logger.output("转换完成。");
+                Logger.output("✅ API响应已成功转换为 Google Gemini 格式");
               }
             }
           } catch (e) {
             // 解析失败则忽略，发送原始数据
+            Logger.output("JSON解析或转换失败，发送原始数据:", e.message);
           }
 
           this._transmitChunk(fullBody, operationId);
