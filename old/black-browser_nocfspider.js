@@ -84,23 +84,12 @@ class ConnectionManager extends EventTarget {
 }
 
 class RequestProcessor {
-  constructor(cfspiderConfig = {}) {
+  constructor() {
     this.activeOperations = new Map();
     this.cancelledOperations = new Set();
     this.targetDomain = "generativelanguage.googleapis.com";
     this.maxRetries = 3; // 最多尝试3次
     this.retryDelay = 2000; // 每次重试前等待2秒
-
-    // CFspider 代理配置
-    this.cfspider = {
-      enabled: cfspiderConfig.enabled || false,
-      endpoint: cfspiderConfig.endpoint || '',
-      token: cfspiderConfig.token || ''
-    };
-
-    if (this.cfspider.enabled) {
-      Logger.output(`🌐 CFspider 代理已启用: ${this.cfspider.endpoint}`);
-    }
   }
 
   execute(requestSpec, operationId) {
@@ -213,17 +202,8 @@ class RequestProcessor {
       }
     }
     const queryString = queryParams.toString();
-    const originalUrl = `https://${this.targetDomain}/${pathSegment}${queryString ? "?" + queryString : ""
+    return `https://${this.targetDomain}/${pathSegment}${queryString ? "?" + queryString : ""
       }`;
-
-    // CFspider 代理逻辑
-    if (this.cfspider.enabled && this.cfspider.endpoint) {
-      const proxyUrl = `${this.cfspider.endpoint}/proxy?url=${encodeURIComponent(originalUrl)}&method=${requestSpec.method}`;
-      Logger.output(`🔀 通过 CFspider 代理: ${proxyUrl.substring(0, 100)}...`);
-      return proxyUrl;
-    }
-
-    return originalUrl;
   }
 
   _generateRandomString(length) {
@@ -240,26 +220,6 @@ class RequestProcessor {
       headers: this._sanitizeHeaders(requestSpec.headers),
       signal,
     };
-
-    // CFspider 代理模式：转换 headers 格式
-    if (this.cfspider.enabled && this.cfspider.endpoint) {
-      const cfspiderHeaders = {};
-
-      // 将所有原始 headers 转换为 x-cfspider-header- 格式
-      for (const [key, value] of Object.entries(config.headers)) {
-        cfspiderHeaders[`x-cfspider-header-${key}`] = value;
-      }
-
-      // 添加 cfspider 认证 token
-      if (this.cfspider.token) {
-        cfspiderHeaders['Authorization'] = `Bearer ${this.cfspider.token}`;
-      }
-
-      config.headers = cfspiderHeaders;
-
-      // cfspider 统一使用 POST 方法传递原始请求
-      config.method = 'POST';
-    }
 
     if (
       ["POST", "PUT", "PATCH"].includes(requestSpec.method) &&
@@ -319,10 +279,10 @@ class RequestProcessor {
 } // <--- 关键！确保这个括号存在
 
 class ProxySystem extends EventTarget {
-  constructor(websocketEndpoint, cfspiderConfig) {
+  constructor(websocketEndpoint) {
     super();
     this.connectionManager = new ConnectionManager(websocketEndpoint);
-    this.requestProcessor = new RequestProcessor(cfspiderConfig);
+    this.requestProcessor = new RequestProcessor();
     this._setupEventHandlers();
   }
 
@@ -600,15 +560,7 @@ class ProxySystem extends EventTarget {
 async function initializeProxySystem() {
   // 清理旧的日志
   document.body.innerHTML = "";
-
-  // 从全局变量读取 cfspider 配置（由 unified-server.js 注入）
-  const cfspiderConfig = window.__CFSPIDER_CONFIG__ || {
-    enabled: false,
-    endpoint: '',
-    token: ''
-  };
-
-  const proxySystem = new ProxySystem(undefined, cfspiderConfig);
+  const proxySystem = new ProxySystem();
   try {
     await proxySystem.initialize();
   } catch (error) {

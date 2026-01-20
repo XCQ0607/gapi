@@ -80,8 +80,7 @@ class AuthSource {
     this.availableIndices = [...this.initialIndices]; // 先假设都可用
 
     this.logger.info(
-      `[Auth] 在 '${this.authMode}' 模式下，初步发现 ${
-        this.initialIndices.length
+      `[Auth] 在 '${this.authMode}' 模式下，初步发现 ${this.initialIndices.length
       } 个认证源: [${this.initialIndices.join(", ")}]`
     );
   }
@@ -114,8 +113,7 @@ class AuthSource {
 
     if (invalidSourceDescriptions.length > 0) {
       this.logger.warn(
-        `⚠️ [Auth] 预检验发现 ${
-          invalidSourceDescriptions.length
+        `⚠️ [Auth] 预检验发现 ${invalidSourceDescriptions.length
         } 个格式错误或无法读取的认证源: [${invalidSourceDescriptions.join(
           ", "
         )}]，将从可用列表中移除。`
@@ -203,6 +201,10 @@ class BrowserManager {
           "camoufox-linux",
           "camoufox"
         );
+      } else if (platform === "win32") {
+        // Windows fallback: try to find a standard installation or rely on config
+        this.browserExecutablePath = path.join(__dirname, "camoufox", "camoufox.exe");
+        this.logger.info(`[Browser] Windows detected. Using path: ${this.browserExecutablePath}`);
       } else {
         throw new Error(`Unsupported operating system: ${platform}`);
       }
@@ -380,7 +382,7 @@ class BrowserManager {
               popupStatus.cookie = true;
               clickedInThisLoop = true;
             }
-          } catch (e) {}
+          } catch (e) { }
         }
 
         // 2. 检查 "Got it" (如果还没点过)
@@ -395,7 +397,7 @@ class BrowserManager {
               popupStatus.gotIt = true;
               clickedInThisLoop = true;
             }
-          } catch (e) {}
+          } catch (e) { }
         }
 
         // 3. 检查 新手引导 "Close" (如果还没点过)
@@ -410,7 +412,7 @@ class BrowserManager {
               popupStatus.guide = true;
               clickedInThisLoop = true;
             }
-          } catch (e) {}
+          } catch (e) { }
         }
 
         // 如果本轮点击了按钮，稍微等一下动画；如果没点，等待1秒避免死循环空转
@@ -421,9 +423,9 @@ class BrowserManager {
         `[Browser] 弹窗检查结束 (耗时: ${Math.round(
           (Date.now() - startTime) / 1000
         )}s)，结果: ` +
-          `Cookie[${popupStatus.cookie ? "Ok" : "No"}], ` +
-          `GotIt[${popupStatus.gotIt ? "Ok" : "No"}], ` +
-          `Guide[${popupStatus.guide ? "Ok" : "No"}]`
+        `Cookie[${popupStatus.cookie ? "Ok" : "No"}], ` +
+        `GotIt[${popupStatus.gotIt ? "Ok" : "No"}], ` +
+        `Guide[${popupStatus.guide ? "Ok" : "No"}]`
       );
 
       this.logger.info(
@@ -511,6 +513,20 @@ class BrowserManager {
 
       this.logger.info("[Browser] (步骤3/5) 编辑器已显示，聚焦并粘贴脚本...");
       await editorContainerLocator.click({ timeout: 30000 });
+
+      // 注入 cfspider 配置到浏览器上下文
+      const cfspiderConfig = {
+        enabled: !!this.config.cfspiderEndpoint,
+        endpoint: this.config.cfspiderEndpoint || '',
+        token: this.config.cfspiderToken || ''
+      };
+
+      if (cfspiderConfig.enabled) {
+        this.logger.info(`[Browser] 正在注入 CFspider 配置: ${cfspiderConfig.endpoint}`);
+        await this.page.evaluate((config) => {
+          window.__CFSPIDER_CONFIG__ = config;
+        }, cfspiderConfig);
+      }
 
       await this.page.evaluate(
         (text) => navigator.clipboard.writeText(text),
@@ -606,7 +622,7 @@ class BrowserManager {
     ) {
       try {
         // --- [增强步骤 1] 强制唤醒页面 (解决不发请求不刷新的问题) ---
-        await currentPage.bringToFront().catch(() => {});
+        await currentPage.bringToFront().catch(() => { });
 
         // 关键：在无头模式下，仅仅 bringToFront 可能不够，需要伪造鼠标移动来触发渲染帧
         // 随机在一个无害区域轻微晃动鼠标
@@ -638,7 +654,7 @@ class BrowserManager {
                 }
               }
             }
-          } catch (e) {}
+          } catch (e) { }
           // 2. 扫描Y轴400-800范围刻意元素
           const MIN_Y = 400;
           const MAX_Y = 800;
@@ -703,8 +719,7 @@ class BrowserManager {
         if (targetInfo.found) {
           this.noButtonCount = 0;
           this.logger.info(
-            `[Browser] 🎯 锁定目标 [${targetInfo.tagName}] (策略: ${
-              targetInfo.strategy === "precise_css" ? "精准定位" : "模糊扫描"
+            `[Browser] 🎯 锁定目标 [${targetInfo.tagName}] (策略: ${targetInfo.strategy === "precise_css" ? "精准定位" : "模糊扫描"
             })...`
           );
 
@@ -1741,8 +1756,7 @@ class RequestHandler {
           ) {
             // 只有在不是“用户取消”的情况下，才打印“尝试失败”的警告
             this.logger.warn(
-              `[Request] 尝试 #${attempt} 失败: 收到 ${
-                lastMessage.status || "未知"
+              `[Request] 尝试 #${attempt} 失败: 收到 ${lastMessage.status || "未知"
               } 错误。 - ${lastMessage.message}`
             );
           }
@@ -1802,7 +1816,7 @@ class RequestHandler {
         this.logger.info(
           `✅ [Request] 响应结束，原因: ${finishReason}，请求ID: ${proxyRequest.request_id}`
         );
-      } catch (e) {}
+      } catch (e) { }
       res.write("data: [DONE]\n\n");
     } catch (error) {
       this._handleRequestError(error, res);
@@ -1879,7 +1893,7 @@ class RequestHandler {
             );
           }
         }
-      } catch (e) {}
+      } catch (e) { }
     } catch (error) {
       if (error.message !== "Queue timeout") throw error;
       this.logger.warn("[Request] 真流式响应超时，可能流已正常结束。");
@@ -1986,7 +2000,7 @@ class RequestHandler {
         this.logger.info(
           `✅ [Request] 响应结束，原因: ${finishReason}，请求ID: ${proxyRequest.request_id}`
         );
-      } catch (e) {}
+      } catch (e) { }
 
       // 4. 设置正确的JSON响应头，并一次性发送处理过的全部数据
       res
@@ -2361,6 +2375,9 @@ class ProxyServerSystem extends EventEmitter {
       immediateSwitchStatusCodes: [429, 503],
       // [新增] 用于追踪API密钥来源
       apiKeySource: "未设置",
+      // [新增] CFspider 代理配置
+      cfspiderEndpoint: "",
+      cfspiderToken: "",
     };
 
     const configPath = path.join(__dirname, "config.json");
@@ -2395,6 +2412,14 @@ class ProxyServerSystem extends EventEmitter {
       config.browserExecutablePath = process.env.CAMOUFOX_EXECUTABLE_PATH;
     if (process.env.API_KEYS) {
       config.apiKeys = process.env.API_KEYS.split(",");
+    }
+
+    // CFspider 配置
+    if (process.env.CFSPIDER_ENDPOINT) {
+      config.cfspiderEndpoint = process.env.CFSPIDER_ENDPOINT.trim();
+    }
+    if (process.env.CFSPIDER_TOKEN) {
+      config.cfspiderToken = process.env.CFSPIDER_TOKEN.trim();
     }
 
     let rawCodes = process.env.IMMEDIATE_SWITCH_STATUS_CODES;
@@ -2465,29 +2490,29 @@ class ProxyServerSystem extends EventEmitter {
     this.logger.info(`  监听地址: ${this.config.host}`);
     this.logger.info(`  流式模式: ${this.config.streamingMode}`);
     this.logger.info(
-      `  轮换计数切换阈值: ${
-        this.config.switchOnUses > 0
-          ? `每 ${this.config.switchOnUses} 次请求后切换`
-          : "已禁用"
+      `  轮换计数切换阈值: ${this.config.switchOnUses > 0
+        ? `每 ${this.config.switchOnUses} 次请求后切换`
+        : "已禁用"
       }`
     );
     this.logger.info(
-      `  失败计数切换: ${
-        this.config.failureThreshold > 0
-          ? `失败${this.config.failureThreshold} 次后切换`
-          : "已禁用"
+      `  失败计数切换: ${this.config.failureThreshold > 0
+        ? `失败${this.config.failureThreshold} 次后切换`
+        : "已禁用"
       }`
     );
     this.logger.info(
-      `  立即切换报错码: ${
-        this.config.immediateSwitchStatusCodes.length > 0
-          ? this.config.immediateSwitchStatusCodes.join(", ")
-          : "已禁用"
+      `  立即切换报错码: ${this.config.immediateSwitchStatusCodes.length > 0
+        ? this.config.immediateSwitchStatusCodes.join(", ")
+        : "已禁用"
       }`
     );
     this.logger.info(`  单次请求最大重试: ${this.config.maxRetries}次`);
     this.logger.info(`  重试间隔: ${this.config.retryDelay}ms`);
     this.logger.info(`  API 密钥来源: ${this.config.apiKeySource}`); // 在启动日志中也显示出来
+    this.logger.info(
+      `  CFspider 代理: ${this.config.cfspiderEndpoint ? `✅ 已启用 (${this.config.cfspiderEndpoint})` : "❌ 已禁用"}`
+    );
     this.logger.info(
       "============================================================="
     );
@@ -2580,8 +2605,7 @@ class ProxyServerSystem extends EventEmitter {
 
       if (clientKey && serverApiKeys.includes(clientKey)) {
         this.logger.info(
-          `[Auth] API Key验证通过 (来自: ${
-            req.headers["x-forwarded-for"] || req.ip
+          `[Auth] API Key验证通过 (来自: ${req.headers["x-forwarded-for"] || req.ip
           })`
         );
         if (req.query.key) {
@@ -2622,8 +2646,7 @@ class ProxyServerSystem extends EventEmitter {
           `[System] HTTP服务器已在 http://${this.config.host}:${this.config.httpPort} 上监听`
         );
         this.logger.info(
-          `[System] Keep-Alive 超时已设置为 ${
-            this.httpServer.keepAliveTimeout / 1000
+          `[System] Keep-Alive 超时已设置为 ${this.httpServer.keepAliveTimeout / 1000
           } 秒。`
         );
         resolve();
@@ -2694,9 +2717,8 @@ class ProxyServerSystem extends EventEmitter {
       <style>body{display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;background:#f0f2f5}form{background:white;padding:40px;border-radius:10px;box-shadow:0 4px 8px rgba(0,0,0,0.1);text-align:center}input{width:250px;padding:10px;margin-top:10px;border:1px solid #ccc;border-radius:5px}button{width:100%;padding:10px;background-color:#007bff;color:white;border:none;border-radius:5px;margin-top:20px;cursor:pointer}.error{color:red;margin-top:10px}</style>
       </head><body><form action="/login" method="post"><h2>请输入 API Key</h2>
       <input type="password" name="apiKey" placeholder="API Key" required autofocus><button type="submit">登录</button>
-      ${
-        req.query.error ? '<p class="error">API Key 错误!</p>' : ""
-      }</form></body></html>`;
+      ${req.query.error ? '<p class="error">API Key 错误!</p>' : ""
+        }</form></body></html>`;
       res.send(loginHtml);
     });
     app.post("/login", (req, res) => {
@@ -2775,37 +2797,31 @@ class ProxyServerSystem extends EventEmitter {
         <div id="status-section">
             <pre>
 <span class="label">服务状态</span>: <span class="status-ok">Running</span>
-<span class="label">浏览器连接</span>: <span class="${
-        browserManager.browser ? "status-ok" : "status-error"
-      }">${!!browserManager.browser}</span>
+<span class="label">浏览器连接</span>: <span class="${browserManager.browser ? "status-ok" : "status-error"
+        }">${!!browserManager.browser}</span>
 --- 服务配置 ---
-<span class="label">流模式</span>: ${
-        config.streamingMode
-      } (仅启用流式传输时生效)
-<span class="label">强制推理</span>: ${
-        this.forceThinking ? "✅ 已启用" : "❌ 已关闭"
-      }
-<span class="label">立即切换 (状态码)</span>: ${
-        config.immediateSwitchStatusCodes.length > 0
+<span class="label">流模式</span>: ${config.streamingMode
+        } (仅启用流式传输时生效)
+<span class="label">强制推理</span>: ${this.forceThinking ? "✅ 已启用" : "❌ 已关闭"
+        }
+<span class="label">立即切换 (状态码)</span>: ${config.immediateSwitchStatusCodes.length > 0
           ? `[${config.immediateSwitchStatusCodes.join(", ")}]`
           : "已禁用"
-      }
+        }
 <span class="label">API 密钥</span>: ${config.apiKeySource}
 --- 账号状态 ---
 <span class="label">当前使用账号</span>: #${requestHandler.currentAuthIndex}
-<span class="label">使用次数计数</span>: ${requestHandler.usageCount} / ${
-        config.switchOnUses > 0 ? config.switchOnUses : "N/A"
-      }
-<span class="label">连续失败计数</span>: ${requestHandler.failureCount} / ${
-        config.failureThreshold > 0 ? config.failureThreshold : "N/A"
-      }
+<span class="label">使用次数计数</span>: ${requestHandler.usageCount} / ${config.switchOnUses > 0 ? config.switchOnUses : "N/A"
+        }
+<span class="label">连续失败计数</span>: ${requestHandler.failureCount} / ${config.failureThreshold > 0 ? config.failureThreshold : "N/A"
+        }
 <span class="label">扫描到的总帐号</span>: [${initialIndices.join(
-        ", "
-      )}] (总数: ${initialIndices.length})
+          ", "
+        )}] (总数: ${initialIndices.length})
       ${accountDetailsHtml}
 <span class="label">格式错误 (已忽略)</span>: [${invalidIndices.join(
-        ", "
-      )}] (总数: ${invalidIndices.length})
+          ", "
+        )}] (总数: ${invalidIndices.length})
             </pre>
         </div>
         <div id="actions-section" style="margin-top: 2em;">
@@ -2877,9 +2893,8 @@ class ProxyServerSystem extends EventEmitter {
         }
             
         function toggleStreamingMode() { 
-            const newMode = prompt('请输入新的流模式 (real 或 fake):', '${
-              this.config.streamingMode
-            }');
+            const newMode = prompt('请输入新的流模式 (real 或 fake):', '${this.config.streamingMode
+        }');
             if (newMode === 'fake' || newMode === 'real') {
                 fetch('/api/set-mode', { 
                     method: 'POST', 
@@ -2940,19 +2955,15 @@ class ProxyServerSystem extends EventEmitter {
               : "已禁用",
           apiKeySource: config.apiKeySource,
           currentAuthIndex: requestHandler.currentAuthIndex,
-          usageCount: `${requestHandler.usageCount} / ${
-            config.switchOnUses > 0 ? config.switchOnUses : "N/A"
-          }`,
-          failureCount: `${requestHandler.failureCount} / ${
-            config.failureThreshold > 0 ? config.failureThreshold : "N/A"
-          }`,
-          initialIndices: `[${initialIndices.join(", ")}] (总数: ${
-            initialIndices.length
-          })`,
+          usageCount: `${requestHandler.usageCount} / ${config.switchOnUses > 0 ? config.switchOnUses : "N/A"
+            }`,
+          failureCount: `${requestHandler.failureCount} / ${config.failureThreshold > 0 ? config.failureThreshold : "N/A"
+            }`,
+          initialIndices: `[${initialIndices.join(", ")}] (总数: ${initialIndices.length
+            })`,
           accountDetails: accountDetails,
-          invalidIndices: `[${invalidIndices.join(", ")}] (总数: ${
-            invalidIndices.length
-          })`,
+          invalidIndices: `[${invalidIndices.join(", ")}] (总数: ${invalidIndices.length
+            })`,
         },
         logs: logs.join("\n"),
         logCount: logs.length,
